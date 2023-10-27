@@ -219,6 +219,5 @@ module MessengerServer
   end
 end
 
-# Usage example:
 port = 3333
 MessengerServer.start_server(port)
