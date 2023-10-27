@@ -35,6 +35,7 @@ This project is a work in progress, and contributions are welcome!
 Feel free to suggest improvements, report issues, or contribute code to enhance the messenger.
 
 Disclaimer
+
 This messenger may not provide the same level of comfort as graphical messengers,
 but it serves as a unique project focused on command-line enthusiasts and those seeking to strengthen their Ruby skills.
 Happy messaging in the command line!
