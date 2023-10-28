@@ -3,6 +3,7 @@ require 'json'
 require 'colorize'
 require 'sqlite3'
 require 'openssl'
+require 'bcrypt'
 
 module MessengerServer
   class Connection < EventMachine::Connection
@@ -61,6 +62,16 @@ module MessengerServer
         start_switch_chat_room
       when 'exit'
         close_connection
+      when /^\/msg (\S+) (.+)$/i
+        send_private_message($1, $2)
+      when '/history'
+        send_message_history
+      when '/status'
+        send_user_status
+      when '/profile'
+        send_user_profile
+      when '/clear'
+        send_clear_screen
       else
         MessengerServer.handle_command(@username, message)
       end
@@ -82,6 +93,11 @@ module MessengerServer
   - friends: List your friends
   - switch room: Switch chat room
   - exit: Leave the chat
+  - /msg username message: Send a private message to a user
+  - /history: View message history
+  - /status: View your status
+  - /profile: View your profile
+  - /clear: Clear the screen
     HELP
       send_data("#{help_message}\n")
       send_prompt("Type 'help' for available commands.")
@@ -89,7 +105,7 @@ module MessengerServer
 
     def list_users
       users = MessengerServer.list_users(@username)
-      send_data("Users in the chat:\n#{users.join(', ')}\n")
+      send_data("Users in the chat:\n#{users}\n")
       send_prompt("Type 'help' for available commands.")
     end
 
@@ -137,6 +153,37 @@ module MessengerServer
       @switching_chat_room = false
     end
 
+    def send_private_message(recipient, message)
+      if MessengerServer.username_exists?(recipient)
+        MessengerServer.send_private_message(@username, recipient, message)
+      else
+        send_prompt("User '#{recipient}' not found.")
+      end
+    end
+
+    def send_message_history
+      history = MessengerServer.get_message_history(@username)
+      send_data("Message History:\n#{history}\n")
+      send_prompt("Type 'help' for available commands.")
+    end
+
+    def send_user_status
+      status = MessengerServer.get_user_status(@username)
+      send_data("Your status: #{status}\n")
+      send_prompt("Type 'help' for available commands.")
+    end
+
+    def send_user_profile
+      profile = MessengerServer.get_user_profile(@username)
+      send_data("Your profile:\n#{profile}\n")
+      send_prompt("Type 'help' for available commands.")
+    end
+
+    def send_clear_screen
+      send_data("\e[H\e[2J") # ANSI escape sequence to clear the screen
+      send_prompt("Type 'help' for available commands.")
+    end
+
     def join_chat_room(username, chat_room)
       MessengerServer.join_chat_room(username, chat_room)
       MessengerServer.broadcast("#{username} has joined the chat room #{chat_room}", chat_room)
@@ -150,22 +197,38 @@ module MessengerServer
   @clients = {}
   @chat_rooms = {}
   @friends = {}
+  @user_statuses = {}
+  @message_history = {}
+  @user_profiles = {}
 
   def self.start_server(port)
     EventMachine.run do
+      Thread.new { show_animation }
       EventMachine.start_server('0.0.0.0', port, Connection)
-      puts "Server active".colorize(:green) + " " + get_animation
+      puts "Server active".colorize(:green)
       puts "Messenger Server started on port #{port}"
       trap("INT") { EventMachine.stop }
     end
   end
 
+  def self.show_animation
+    animations = "|/-\\"
+    index = 0
+    loop do
+      print " " + animations[index] + " Server active |/-\\|/-\\|/\r".colorize(:green)
+      index = (index + 1) % animations.length
+      sleep(0.1)
+    end
+  end
+
   def self.add_client(username, connection)
     @clients[username] = connection
+    update_user_status(username, 'online')
   end
 
   def self.remove_client(username)
     @clients.delete(username)
+    update_user_status(username, 'offline')
     leave_chat_rooms(username)
   end
 
@@ -180,7 +243,11 @@ module MessengerServer
   end
 
   def self.handle_command(username, message)
-    broadcast("#{username}: #{message}", 'general')
+    timestamp = Time.now.strftime("%Y-%m-%d %H:%M:%S")
+    full_message = "#{timestamp} #{username}: #{message}"
+    @message_history[@chat_rooms[username]] ||= []
+    @message_history[@chat_rooms[username]] << full_message
+    broadcast(full_message, @chat_rooms[username])
   end
 
   def self.join_chat_room(username, chat_room)
@@ -210,6 +277,36 @@ module MessengerServer
     @friends[user] || []
   end
 
+  def self.send_private_message(sender, recipient, message)
+    timestamp = Time.now.strftime("%Y-%m-%d %H:%M:%S")
+    full_message = "#{timestamp} #{sender} (private): #{message}"
+    @message_history[recipient] ||= []
+    @message_history[recipient] << full_message
+    @clients[recipient].send_prompt(full_message)
+    @clients[sender].send_prompt("Message sent to #{recipient}: #{message}")
+  end
+
+  def self.get_message_history(username)
+    @message_history[username]&.join("\n") || "No message history available."
+  end
+
+  def self.update_user_status(username, status)
+    @user_statuses[username] = status
+  end
+
+  def self.get_user_status(username)
+    @user_statuses[username] || 'offline'
+  end
+
+  def self.get_user_profile(username)
+    profile_data = @user_profiles[username]
+    if profile_data
+      "Username: #{username}\nStatus: #{get_user_status(username)}\nProfile Data: #{profile_data}"
+    else
+      "Profile not available."
+    end
+  end
+
   def self.get_animation
     ['|', '/', '-', '\\'].cycle.take(10).map { |frame| frame.colorize(:green) }.join
   end
@@ -218,6 +315,5 @@ module MessengerServer
     @clients.key?(username)
   end
 end
-
 port = 3333
 MessengerServer.start_server(port)
